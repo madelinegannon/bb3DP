@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<classpath>
+	<classpathentry kind="src" path="src"/>
+	<classpathentry kind="con" path="org.eclipse.jdt.launching.JRE_CONTAINER/org.eclipse.jdt.internal.debug.ui.launcher.StandardVMType/J2SE-1.5"/>
+	<classpathentry kind="lib" path="C:/Program Files (x86)/processing-2.2.1/core/library/core.jar"/>
+	<classpathentry kind="lib" path="C:/Program Files (x86)/processing-2.2.1/core/library/gluegen-rt.jar">
+		<attributes>
+			<attribute name="org.eclipse.jdt.launching.CLASSPATH_ATTR_LIBRARY_PATH_ENTRY" value="C:/Program Files (x86)/processing-2.2.1/core/library"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Program Files (x86)/processing-2.2.1/core/library/jogl-all.jar">
+		<attributes>
+			<attribute name="org.eclipse.jdt.launching.CLASSPATH_ATTR_LIBRARY_PATH_ENTRY" value="C:/Program Files (x86)/processing-2.2.1/core/library"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/peasycam/library/peasycam.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="http://mrfeinberg.com/peasycam/reference/index.html"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/toxiclibs-complete-0020/toxiclibs_p5/library/toxiclibs_p5.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="file:/C:/Users/t_gannm/Documents/Processing/libraries/toxiclibs-complete-0020/toxiclibs_p5/docs/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/toxiclibs-complete-0020/toxiclibscore/library/toxiclibscore.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="file:/C:/Users/t_gannm/Documents/Processing/libraries/toxiclibs-complete-0020/toxiclibscore/docs/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/toxiclibs-complete-0020/verletphysics/library/verletphysics.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="file:/C:/Users/t_gannm/Documents/Processing/libraries/toxiclibs-complete-0020/verletphysics/docs/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/SimpleOpenNI/library/SimpleOpenNI.jar" sourcepath="C:/Users/t_gannm/Documents/Processing/libraries/SimpleOpenNI/simple-openni-read-only.zip">
+		<attributes>
+			<attribute name="javadoc_location" value="file:/C:/Users/t_gannm/Documents/Processing/libraries/SimpleOpenNI/documentation/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/FingerTracker/library/FingerTracker.jar" sourcepath="C:/Users/t_gannm/Documents/Processing/libraries/FingerTracker/src">
+		<attributes>
+			<attribute name="javadoc_location" value="file:/C:/Users/t_gannm/Documents/Processing/libraries/FingerTracker/reference/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/opencv_processing/library/opencv_processing.jar" sourcepath="C:/Users/t_gannm/Documents/Processing/libraries/opencv_processing/src">
+		<attributes>
+			<attribute name="javadoc_location" value="file:/C:/Users/t_gannm/Documents/Processing/libraries/opencv_processing/reference/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/opencv_processing/library/opencv-245.jar"/>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/commons-math3-3.3/commons-math3-3.3.jar">
+		<attributes>
+			<attribute name="javadoc_location" value="jar:file:/C:/Users/t_gannm/Documents/Processing/libraries/commons-math3-3.3/commons-math3-3.3-javadoc.jar!/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/controlP5/library/controlP5.jar" sourcepath="C:/Users/t_gannm/Documents/Processing/libraries/controlP5/src">
+		<attributes>
+			<attribute name="javadoc_location" value="http://www.sojamo.com/libraries/controlP5/reference/"/>
+		</attributes>
+	</classpathentry>
+	<classpathentry kind="lib" path="C:/Users/t_gannm/Documents/Processing/libraries/toxiclibs-complete-0020/colorutils/library/colorutils.jar"/>
+	<classpathentry kind="output" path="bin"/>
+</classpath>
