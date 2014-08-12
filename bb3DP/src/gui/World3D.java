@@ -2,8 +2,9 @@ package gui;
 
 import java.awt.GridBagConstraints;
 import java.awt.Insets;
+import java.io.PrintWriter;
 import java.util.ArrayList;
-import java.util.Iterator;
+import java.util.List;
 
 import controlP5.ControlEvent;
 import controlP5.ControlP5;
@@ -17,15 +18,25 @@ import toxi.color.ColorGradient;
 import toxi.color.ColorList;
 import toxi.color.TColor;
 import toxi.geom.AABB;
+import toxi.geom.Line3D;
 import toxi.geom.Vec3D;
+import toxi.geom.mesh.Face;
+import toxi.geom.mesh.LaplacianSmooth;
+import toxi.geom.mesh.Mesh3D;
 import toxi.geom.mesh.TriangleMesh;
+import toxi.geom.mesh.Vertex;
+import toxi.geom.mesh.WETriangleMesh;
 import toxi.math.CosineInterpolation;
-import toxi.physics.VerletConstrainedSpring;
 import toxi.physics.VerletParticle;
 import toxi.physics.VerletPhysics;
 import toxi.physics.VerletSpring;
 import toxi.physics.behaviors.GravityBehavior;
 import toxi.processing.ToxiclibsSupport;
+import toxi.util.datatypes.FloatRange;
+import toxi.volume.BoxBrush;
+import toxi.volume.HashIsoSurface;
+import toxi.volume.MeshLatticeBuilder;
+import toxi.volume.VolumetricBrush;
 
 
 @SuppressWarnings("serial")
@@ -38,6 +49,10 @@ public class World3D extends PApplet{
 	// GUI Variables
 	private PeasyCam cam;
 	private PFont font;
+	
+	/**
+	 * GUI / Sliders for manipulating physics world.
+	 */
 	private ControlFrame cf;
 	private ColorList backgroundGradient;
 	private boolean saveMesh = false;
@@ -48,23 +63,57 @@ public class World3D extends PApplet{
 	
 	// Physics Variables
 	private VerletPhysics physics;
-	private GravityBehavior g = new GravityBehavior(new Vec3D(0,0,-.2f));
+	private GravityBehavior g = new GravityBehavior(new Vec3D(0,0,-.5f));
 	private float drag = .3f;
 	private float speed = .25f;
 	
 	
-	// MODELING PARAMS
+	/**
+	 * 3D model of user's arm.
+	 */
 	private Arm arm;
+	
+	/**
+	 * Finger tips of the user's modeling hand.
+	 */
 	private Vec3D[] hand = new Vec3D[5];
+	
+	/**
+	 * If the modeling hand is detected.
+	 */
 	private boolean isHandDetected = false;
-	private ArrayList<ArrayList<PVector>> armScan = new ArrayList<ArrayList<PVector>>(); 	// points from DepthCAM
+	
+	/**
+	 * Raw scan data from DepthCAM.
+	 */
+	private ArrayList<ArrayList<PVector>> armScan = new ArrayList<ArrayList<PVector>>(); 	
+	
+	/**
+	 * Dynamic 3D model to manipulate with modeling hand.
+	 */
 	private Model model;
+	
+	boolean showMesh = true;
+	
+	
+	/**
+	 * Mesh rendering
+	 */
 	private ToxiclibsSupport gfx;
 	
+	/**
+	 * Voxelized Mesh
+	 */
+	private Mesh3D mesh = new WETriangleMesh();
+	private boolean voxelize = false;
 	
-	// GESTURE VARIABLES
+	/**
+	 * If the modeling hand is touching the canvas area.
+	 */
 	private boolean isTouching = false;
-	private boolean isScaling = false;
+	private boolean isFlipped = false;
+	private boolean isInitialized = false;
+
 	
 	// DEBUGGING
 	private boolean debugMode = true;
@@ -95,28 +144,24 @@ public class World3D extends PApplet{
 		// create arm and model
 		arm = new Arm(this);
 		model = new Model(this, arm);
-		
-		// add hand particles (4)
-		rigHand();
-		
+	
 	}
 	
-//	int c = 0;
+
 	public void draw(){
-//		background(127,127,133);
+
 		smooth(4);
 		lights();
-		fill(setBackgroundColor());
-		// create function to shift the color based on distance from origin
-//		fill(backgroundGradient.get((int) (c%bounds)).toARGB()); c++;
 		
+		// create gradient background
+		fill(setBackgroundColor());		
 		noStroke();
 		sphere(10*bounds);
 
 		
 		drawAxes();
 		
-
+		// if we have valid scan data from the kinect, update the arm
 		if (armScan.size() > 0){
 			arm.update(armScan);
 		}
@@ -124,9 +169,16 @@ public class World3D extends PApplet{
 		arm.draw();
 		model.update();
 		
-		if (isHandDetected){
+		if (!isInitialized && physics.particles.size() > 7){
+			// add (4) hand particles 
+			rigHand();
+			isInitialized = true;
+		}
+		
+		
+		if (physics.particles.size() > 7){
 			updateHand();
-			showHandPoints();
+//			showHandPoints();
 		}
 	
 		strokeWeight(1);
@@ -135,7 +187,8 @@ public class World3D extends PApplet{
 		gfx.mesh(arm.getMesh());
 		fill(15,205,255,80);
 		stroke(255,40);
-		gfx.mesh(model.getMesh());
+		if (showMesh)
+			gfx.mesh(model.getMesh(),true);
 
 		
 		fill(15,205,255,200);
@@ -158,18 +211,70 @@ public class World3D extends PApplet{
 	
 		cam.endHUD();
 		
-//		if (saveOut){
+		if (saveMesh){
 //			saveMesh(model.getMesh());
-//			saveOut = false;
-//		}
+//			
+//			if (mesh.getNumFaces() != 0)
+//				saveMesh(mesh);
+
+			// save out the 3D paths of the agents
+			if (saveCount == 0 || saveCount == 3 || saveCount >= 6)
+				save();
+			saveCount++;
+			
+			// just in case we forgot!
+			saveMesh = false;
+		}
 		
 		if (!freeze)
 			physics.update();
+		
+		if (voxelize)
+			voxelizeMesh();
+		
+		if (mesh.getNumFaces() != 0)
+			gfx.mesh(mesh);
 		
 //		System.out.println("Time: "+millis()/1000.0);
 	}
 
 	
+	public void keyPressed(){
+	
+			if (key == 's')
+				saveMesh = !saveMesh;
+			
+	//		if (key == 'd')
+	//			debugMode = !debugMode;
+	
+			if (key == 'f' || key == 'F')
+				freeze = !freeze;
+			
+	//		if (key == 'v')
+	//			voxelize = !voxelize;
+			
+			if (key == 'r' || key == 'R')
+				model.reset();
+			
+			if (key == 'l' || key == 'L'){
+				isFlipped = !isFlipped;
+				arm.setFlip(isFlipped);			
+			}
+			
+			if (key == 'b' || key == 'B'){
+				model.heatMap.blur();
+			}
+			
+			if (key == 'g' || key == 'G'){
+				model.generate();
+			}
+			
+			if (key == 'w' || key == 'W'){
+				showMesh = !showMesh;
+			}
+			
+		}
+
 	/** 
 	 * Sets up camera positions and system colors for mode changes
 	 */
@@ -184,8 +289,8 @@ public class World3D extends PApplet{
         cam.setMaximumDistance(bounds*10);
         
         cam.rotateX(radians(-90));
-        cam.rotateY(radians(30));
-        cam.rotateX(radians(15));
+        cam.rotateY(radians(-45));
+        cam.rotateX(radians(45));
         
         // Set up background colors
         ColorGradient grad = new ColorGradient();
@@ -257,68 +362,154 @@ public class World3D extends PApplet{
 
 	/**
 	 * Creates place holder particles for visualizing the modeling hand.
+	 * The modeling hand is the last 4 particles in the physics world.
 	 */
 	private void rigHand() {
 				
-		float stiff = .1f;
+		float stiff = 1f;
 		
 		// connect the edges of the wrist to the  center (at a lower resolution)
-		VerletParticle p0  = new VerletParticle(0,0,0);			// scan
-		VerletParticle p1  = new VerletParticle(0,0,-2);		// modeling
-		VerletParticle p2  = new VerletParticle(5,0,0);			// scan
-		VerletParticle p3  = new VerletParticle(5,0,-2);		// modeling
+		VerletParticle p8  = new VerletParticle(-5,0,0);		// scan
+		VerletParticle p9  = new VerletParticle(-5,0,-2);		// modeling
+		VerletParticle p10 = new VerletParticle(5,0,0);			// scan
+		VerletParticle p11 = new VerletParticle(5,0,-2);		// modeling
 		
-		// the 0th through 4th particles in the physics world 
-		physics.addParticle(p0);		
-		physics.addParticle(p1);
-		physics.addParticle(p2);
-		physics.addParticle(p3);
-		
+		physics.addParticle(p8);		
+		physics.addParticle(p9);
+		physics.addParticle(p10);
+		physics.addParticle(p11);	
+	
 		// add weight to the modeling points
-		p1.setWeight(10);		
-		p3.setWeight(10);
-		
+		p9.setWeight(10);		
+		p11.setWeight(10);
+	
 		// connect with springs
-		physics.addSpring(new VerletSpring(p0,p1,10,stiff));
-		physics.addSpring(new VerletSpring(p2,p3,10,stiff));
-		
+		physics.addSpring(new VerletSpring(p8,p9,1,stiff));
+		physics.addSpring(new VerletSpring(p10,p11,1,stiff));
+	
 	}
+	
+	
 
 	/**
-	 * Updates the particles of the modeling hand (if detected)
+	 * Updates the particles of the modeling hand (if detected).		<br/>
+	 * If not detected, it locks them in place.							<br/>
+	 * [ .... you can use isLocked() to check and see if they're activated].
 	 */
 	private void updateHand(){
-
-		if (hand[0] != null){
-			physics.particles.get(0).set(hand[0]);
+		
+		
+		if (hand[0] == null && !physics.particles.get(8).isLocked()){
+			physics.particles.get(8).lock();
+			physics.particles.get(9).lock();
+		}
+		else if (hand[0] != null){
 			
-			// not the best solution, but working
-			if (Float.isNaN(physics.particles.get(1).x)){
-//				println("isNaN hand[0]");
+			if (physics.particles.get(8).isLocked()){
+				physics.particles.get(8).unlock();
+				physics.particles.get(9).unlock();
+			}
+			
+			// check if we have a NaN error ... not ideal
+			if (Float.isNaN(physics.particles.get(9).x)){
 				VerletParticle p = new VerletParticle(hand[0].x, hand[0].y, hand[0].z - 10);
-				physics.particles.get(1).set(p);
-				physics.springs.get(0).b = physics.particles.get(1);
+				p.setWeight(10);
+				physics.particles.set(9,p);
+				physics.springs.get(physics.springs.size()-2).b = physics.particles.get(9);
 			}
 			
+			// update scan position ... not ideal
+			physics.particles.get(8).set(hand[0]);
 		}
-
 		
-		if (hand[1] != null){
-			physics.particles.get(2).set(hand[1]);
+		if (hand[1] == null && !physics.particles.get(10).isLocked()){
+			physics.particles.get(10).lock();
+			physics.particles.get(11).lock();
+		}
+		else if (hand[1] != null){
 
-			// not the best solution, but working
-			if (Float.isNaN(physics.particles.get(3).x)){
-//				println("isNaN hand[1]");
-				VerletParticle p = new VerletParticle(hand[1].x, hand[1].y, hand[1].z - 10);
-				physics.particles.get(3).set(p);
-				physics.springs.get(1).b = physics.particles.get(3);
+			if (physics.particles.get(10).isLocked()){
+				physics.particles.get(10).unlock();
+				physics.particles.get(11).unlock();
 			}
-		
+
+			// check if we have a NaN error
+			if (Float.isNaN(physics.particles.get(11).x)){
+				VerletParticle p = new VerletParticle(hand[1].x, hand[1].y, hand[1].z - 10);
+				p.setWeight(10);
+				physics.particles.set(11,p);
+				physics.springs.get(physics.springs.size()-1).b = physics.particles.get(11);
+			}
+
+			// update position
+			physics.particles.get(10).set(hand[1]);
+
+			/*
+			 * MODIFY THE HEATMAP BASED ON TOUCH
+			 */
+
+			Vec3D v0 = physics.particles.get(11);
+			Vertex v1 =  model.getMesh().getClosestVertexToPoint(physics.particles.get(11));
+
+
+			strokeWeight(5);
+			stroke(255,0,0,50);
+			int res = 60;			
+
+			if (v0 != null){
+				for (Vertex v : getClosestVertices(model.getMesh(), v0, 10)){
+
+					// Visualize the connection between the hand and the mesh
+					line(v0.x,v0.y,v0.z,v.x,v.y,v.z);
+
+					int index = -1;
+					int x, y;
+					if (v1.id % 2 != 0){
+						y = (v.id) / res;
+						x = (v.id) % res;						
+					}
+					else{
+						y = (v.id) / res - 1;
+						x = (v.id) % res;	
+					}	
+
+					index = x + y*res;
+
+					if (index > 0 && index < model.heatMap.getCells().size()){
+						model.heatMap.incrementColor(index);
+					}
+
+				}
+			}
+
 		}
-	
+	}
+		
+
+	/**
+	 * Helper function to get a number of vertices within a given radius of the 
+	 * hand point.
+	 * @param m 		- mesh to search through
+	 * @param p			- scan point to search from
+	 * @param radius	- radius of interest
+	 * @return
+	 */
+	private ArrayList<Vertex> getClosestVertices(TriangleMesh m, Vec3D p, int radius){
+		ArrayList<Vertex> temp = new ArrayList<Vertex>();
+		
+		for (Vertex v : m.getVertices()){
+			
+			if (v.distanceToSquared(p) < radius*radius)
+				temp.add(v);
+			
+		}
+		
+		
+		return temp;
 	}
 
 	private void showHandPoints() {
+		noStroke();
 		
 		if (isTouching)
 			fill(188,156,90);
@@ -327,17 +518,18 @@ public class World3D extends PApplet{
 		
 		if (hand[0] != null){			
 			pushMatrix();
-			translate(physics.particles.get(1).x,physics.particles.get(1).y,physics.particles.get(1).z);
+			translate(physics.particles.get(7).x,physics.particles.get(1).y,physics.particles.get(1).z);
 			box(15);
-			popMatrix();
+			popMatrix();			
 		}
 		
 		if (hand[1] != null){
 			pushMatrix();
 			translate(physics.particles.get(3).x,physics.particles.get(3).y,physics.particles.get(3).z);
 			box(15);
-			popMatrix();		
+			popMatrix();					
 		}
+
 	}
 
 	/**
@@ -376,23 +568,108 @@ public class World3D extends PApplet{
 
 	}
 	
-	/**
-	 * Saves an .stl file to theh <i>src/data/prints</i> folder
-	 */
-	private void saveMesh(TriangleMesh m){
+	private int saveCount = 0;
+	private void save(){
+		String name = month() + day() + year() + "_" + hour() + "-" + minute() + "-" + second()+"agents_blur"+saveCount;
+		PrintWriter output = createWriter(sketchPath("src/data/lines/"+name+".txt")); 
+		println(model.structure.size()+" agents to save");
+		for (Mycelium agent : model.structure){
+			String agentPath = "";
+			for (Vec3D v : agent.path3D){
+				String s = "{"+v.x+","+v.y+","+v.z+"} ";
+				agentPath += s;
+			}
 
-		// Make path to save stl
-		String path = sketchPath("")+ "src/data/prints/3dPrint_v." + month() + day()
-				+ year() + "_" + hour() + "-" + minute() + "-" + second()+".stl";
+			// each agent @ 300 points each	on a new line
+			output.println(agentPath);
+		}
 
-		m.flipVertexOrder(); // faces outwards
-		m.saveAsSTL(sketchPath(path));
-		m.flipVertexOrder(); // put back to normal
+		output.flush();
+		output.close();
+		
+		saveFrame(sketchPath("src/data/lines/"+name+".png"));
+
+		System.err.println("Sucessfully saved out to: " + name);
+		
+		
 		saveMesh = false;
-
 	}
 	
 	
+	
+	/**
+	 * Saves an .stl file to theh <i>src/data/prints</i> folder
+	 */
+	
+	private void saveMesh(Mesh3D m){
+
+		
+		
+//		// Make path to save stl
+//		String path = sketchPath("")+ "src/data/prints/3dPrint_v." + month() + day()
+//				+ year() + "_" + hour() + "-" + minute() + "-" + second()+".stl";
+//
+//		m.flipVertexOrder(); // faces outwards
+//		if (m instanceof TriangleMesh)
+//			((TriangleMesh) m).saveAsSTL(sketchPath(path));
+//		m.flipVertexOrder(); // put back to normal
+		saveMesh = false;
+
+		
+	}
+	
+	private void voxelizeMesh(){
+		
+		mesh = new WETriangleMesh();
+
+		Vec3D extent = arm.getMesh().getBoundingBox().getExtent();	
+		
+		int voxelRes = 100;
+		
+		float maxAxis = max(extent.x, extent.y, extent.z);
+		
+		int resX = (int) (extent.x / maxAxis * 2 * voxelRes);
+		int resY = (int) (extent.y / maxAxis * voxelRes) / 2;
+		int resZ = (int) (extent.z / maxAxis * 2 * voxelRes);
+		
+		MeshLatticeBuilder builder = new MeshLatticeBuilder(extent.scale(2),
+				resX, resY, resZ, new FloatRange(.01f, .01f));
+		
+		
+		builder.setInputBounds(new AABB(arm.getMesh().getBoundingBox(), extent.scale(1.1f)));
+		
+		VolumetricBrush brush = new BoxBrush(builder.getVolume(), .33f);
+		brush.setSize(0);
+		brush.setMode(VolumetricBrush.MODE_PEAK);
+		
+		println("voxel size: "+builder.getVolume().voxelSize);
+		
+		
+		// MESH SHOULD BE REORIENTED TOWARDS THE ORIGIN BEFORE CREATING LATTICE
+		
+		
+		List<Face> faces = arm.getMesh().getFaces();
+		for (Face f : faces){
+			
+			// create a Line3D of the face edge
+			Line3D segment = new Line3D(f.a, f.b);
+//			builder.createLattice(brush, segment, 1);
+//			segment = new Line3D(f.b, f.c);
+//			builder.createLattice(brush, segment, 1);
+			segment = new Line3D(f.c, f.a);
+			builder.createLattice(brush, segment, 1);
+		
+		}
+		
+		builder.getVolume().closeSides();
+		
+		
+		new HashIsoSurface(builder.getVolume()).computeSurfaceMesh(mesh, 0.66f);
+		new LaplacianSmooth().filter((WETriangleMesh) mesh, 4);
+
+
+		voxelize = false;
+	}
 	
 	
 	/**
@@ -405,6 +682,42 @@ public class World3D extends PApplet{
 			armScan.clear();
 			armScan.addAll(pts);
 		}
+		
+	}
+	
+	/**
+	 * Sends a (+/-) percentage turned of the wrist to the arm.
+	 * 
+	 * @param percentage
+	 */
+//	public void setWristRotation(float percentage){		
+//		if (arm != null)			
+//			arm.setWristRotation(percentage);			
+//	}
+	
+	
+	/**
+	 * Sends two points
+	 * @param pts
+	 */
+	public void setWristRotationPts(PVector[] pts){
+		if (arm != null){	
+			Vec3D[] points = new Vec3D[2];
+			points[0] = new Vec3D(pts[0].x,pts[0].y,-1*pts[0].z);
+			points[1] = new Vec3D(pts[1].x,pts[1].y,-1*pts[1].z);
+	
+			arm.setWristRotationPts(points);
+		}
+	}
+	
+	/**
+	 * Load the 3D points of the wrist and elbow from the DepthCAM
+	 * @param pts - wrist and elbow scan points
+	 */
+	public void setCanvasArea(Float[] lerp){
+		
+		if (lerp != null && arm != null)
+			arm.lerp = lerp;
 		
 	}
 	
@@ -423,8 +736,10 @@ public class World3D extends PApplet{
 				hand[i] = null;
 			else{
 				pts[i].z *= -1; // flip the Z
-				hand[i] = new Vec3D(pts[i].x, pts[i].y, pts[i].z);
-				Vec3D offset = Vec3D.ZERO.sub(arm.getCentroid());
+				
+				// lower the Z a tad to better correlate with the actual hand pos
+				hand[i] = new Vec3D(pts[i].x, pts[i].y, pts[i].z - 15);
+				Vec3D offset = Vec3D.ZERO.sub(arm.getCentroid()); // I think this is the wrong centroid
 				hand[i].addSelf(offset);	
 				
 				isHandDetected = true;
@@ -439,18 +754,6 @@ public class World3D extends PApplet{
 		
 	}
 	
-	
-	public void keyPressed(){
-
-		if (key == 's')
-			saveMesh = !saveMesh;
-		
-		if (key == 'd')
-			debugMode = !debugMode;
-
-		if (key == 'f')
-			freeze = !freeze;
-	}
 	
 	public boolean getDebugMode(){
 		return debugMode;
@@ -480,8 +783,8 @@ public class World3D extends PApplet{
 	 * @param flag
 	 */
 	public void isScaling(boolean flag){
-		isScaling = flag;
-		arm.isScaling(flag);
+		// override for now
+		arm.isScaling(false);
 	}
 	
 	/**

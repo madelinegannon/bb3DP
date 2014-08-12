@@ -14,6 +14,7 @@ import processing.core.PImage;
 import processing.core.PVector;
 import processing.opengl.PGraphicsOpenGL;
 
+
 public class DepthCAM extends PApplet{
 
 	private Main parent;
@@ -21,31 +22,61 @@ public class DepthCAM extends PApplet{
 	private int width;
 	private int height;
 	
-	// KINECT Variables
+	/**
+	 * The kinect / OpenNI object.
+	 */
 	private SimpleOpenNI context;
+	/**
+	 * Stores the kinect's depth map.
+	 */
 	private int[] depth;
 	
 	// CV Variables
 	private OpenCV opencv;
 	
+	/**
+	 * The full forearm.
+	 */
+	private Hand canvasHand   = new Hand(Hand.CANVAS);
 	
-	private Hand canvasHand   = new Hand();
-	private Hand modelingHand = new Hand();
+	/**
+	 * The hand acting on the {@link #canvasArm}.
+	 */
+	private Hand modelingHand = new Hand(Hand.MODELING);
+	
+	/**
+	 * The area on the arm for interacting / modeling on.
+	 */
 	private Forearm canvasArm = new Forearm();
-	private PImage fMask;	// forearm mask
-	private PImage mhMask;	// modeling hand mask
+	
+	/**
+	 * The forearm mask from OpenCV.
+	 */
+	private PImage fMask;
+	
+	/**
+	 * The modeling hand mask from OpenCV.
+	 */
+	private PImage mhMask;
+	
+	/**
+	 * Snapshot of the post-processed modeling
+	 */
 	private PImage mHand; // opencv snapshot of processed modeling hand
 
 	
 	// GUI Variables
 	private PeasyCam cam;
 	private PFont font;
+	/**
+	 * Prevents the kinect's depth map from updating.
+	 */
 	private boolean freeze = false;
-	private boolean near   = false;		// whether the modeling hand is within the bounding box of the full canvas arm
+	/**
+	 * Is the modeling hand is within the bounding box of the full canvas arm.
+	 */
+	private boolean near   = false;		
 	private boolean display = true;
-	
-	
-	private boolean initialized  = false;
 	
 	
 	
@@ -75,8 +106,7 @@ public class DepthCAM extends PApplet{
 		// flip the modeling hand
 		modelingHand.isFlipped = true;
 		
-		initCamera();
-		
+		initCamera();		
 	}
 	
 	
@@ -106,9 +136,8 @@ public class DepthCAM extends PApplet{
 
 			background(map(dist,20,width/2,60,0));
 		}		
-		
-		
-//		image(context.depthImage(),0,0);
+			
+		image(context.depthImage(),0,0);
 				
 		int mid = 700;
 		int far = 770;
@@ -124,13 +153,12 @@ public class DepthCAM extends PApplet{
 		findModelingHand();
 
 		
-		
 		// visualize the corners of the forearm
-		PVector[] corn	= canvasArm.getCorners();
-		for (int i=0; i<corn.length; i++){
+		PVector[] c	= canvasArm.trueCorners;
+		for (int i=0; i<c.length; i++){
 			int radius = ((i+1)*i)+15;
-			if(corn[i] != null)
-				ellipse(corn[i].x,corn[i].y,radius,radius);
+			if(c[i] != null)
+				ellipse(c[i].x,c[i].y,radius,radius);
 		}
 		
 		
@@ -238,11 +266,20 @@ public class DepthCAM extends PApplet{
 			else if (d >= dOffset && d < 770){
 				// find the estimated depth of arm at (x,y)
 				float run = canvasArm.axisB.y - y;
-				float m = canvasArm.getYZSlope();		
-				float d2 = canvasArm.axisB.z - 10 - (m*run); 
+				float m   = canvasArm.getYZSlope();		
+				float d2  = canvasArm.axisB.z - 10 - (m*run); 
+				
+				// try also doing the XZ slope
+				run = canvasArm.axisB.x - x;
+				m   = canvasArm.getXZSlope();
+				
+				d2 -= (m*run) - 3;
 				
 				// if d is smaller, and the point isn't apart of the canvas Arm, we're on top
 				if (d < d2 && !canvasHand.bb.contains(x,y) && y < canvasHand.bb.y - 25){
+//					println("m*run for XZ: "+m*run);
+//					println("SLOPE: "+m);
+//					println("RUN: "+run);
 //					println("axisA.z :"+canvasArm.axisA.z+ ", axisB.z: "+canvasArm.axisB.z+", slopeYZ: "+m);
 //					println("estimated depth of arm at x,y: "+d2);
 //					println("depth of modeling hand at x,y: "+d);
@@ -288,7 +325,8 @@ public class DepthCAM extends PApplet{
 			
 			ArrayList<Contour> canvas = opencv.findContours();
 	
-			for (Contour c : canvas){					
+			for (Contour c : canvas){		
+				
 				if (c.area() > 10000){
 	
 					// we should only have one of this area; if not, tidy up your work station! 
@@ -305,17 +343,7 @@ public class DepthCAM extends PApplet{
 			}		
 		
 			
-			/*
-			 * Update our persistent corners if not scaling the forearm
-			 */
-			if (!near){//!canvasArm.isScaling && canvasArm.getCorners()[3].y < 5){			
-				for (int i=0; i<4; i++)
-					canvasArm.fixedCorners[i] = canvasArm.getCorners()[i].get();
-			}
-			
-			
-			if (canvasArm.isScaling() || canvasArm.stickMode)
-				canvasArm.getScaledForearm();
+			canvasArm.findCanvasArea();
 			
 			
 			/*
@@ -369,19 +397,22 @@ public class DepthCAM extends PApplet{
 					rect(wristRegion.x,wristRegion.y,wristRegion.width,wristRegion.height);
 				}
 				
-				
-				
+								
 				/*
 				 *  Find and set wrist and elbow points
 				 */
+				
+				ArrayList<Integer> palm = new ArrayList<Integer>();
 				
 				ArrayList<PVector> wPts = new ArrayList<PVector>();
 				ArrayList<PVector> ePts = new ArrayList<PVector>();
 				for (int i=0; i<arm.numPoints(); i++){
 					PVector pt = arm.getPoints().get(i);
 					
-					if (wristRegion.contains(pt.x,pt.y))
+					if (wristRegion.contains(pt.x,pt.y)){
 						wPts.add(pt);
+						palm.add(i);
+					}
 					
 					if (armRegion.contains(pt.x,pt.y) && !wristRegion.contains(pt.x,pt.y) && pt.y < 10)
 						ePts.add(pt);
@@ -393,11 +424,12 @@ public class DepthCAM extends PApplet{
 				PVector e0 = new PVector();
 				PVector e1 = new PVector();
 
+			
 				// ignore any extra points
 				if (wPts.size() > 1){
 					w0 = wPts.get(0);
-					w1 = wPts.get(wPts.size()-1);
-				}							
+					w1 = wPts.get(wPts.size()-1);			
+				}										
 				if (ePts.size() > 1){
 					
 					// check the slope of the forearm to decide which point is first	
@@ -413,21 +445,15 @@ public class DepthCAM extends PApplet{
 				}
 			
 					
-				if (!near){//!canvasArm.isScaling){
+				if (!near){
 					ArrayList<PVector> forearmPts = new ArrayList<PVector>();
 					forearmPts.add(w0);
 					forearmPts.add(w1);
 					forearmPts.add(e0);
 					forearmPts.add(e1);
 
-
-					canvasArm.addCorners(forearmPts);
-
-					PVector[] corners	= canvasArm.getCorners();
-
-					for (int i=0; i<corners.length; i++)
-						canvasArm.fixedCorners[i] = corners[i];
-			
+					// add the true corners to the averaging array
+					canvasArm.addCorners(forearmPts);	
 				}
 				
 										
@@ -436,7 +462,98 @@ public class DepthCAM extends PApplet{
 				 */
 				canvasArm.generate3D(false);
 				world.setArmPts(canvasArm.generate3D(true));
+				world.setCanvasArea(canvasArm.lerpCorners);
+				
+				
+				/*
+				 * Send 3D palm points to World3D 
+				 */
+				
+				PVector minPt = new PVector(width,0,0);
+				PVector maxPt = new PVector(0,0,0);
+				for (int i=0; i<arm.getConvexHull().numPoints(); i++){
+					
+					PVector pt = arm.getConvexHull().getPoints().get(i);
+					
+					if (handRegion.contains(pt.x,pt.y)){
+						
+						if (pt.x < minPt.x)
+							minPt = pt;
+						
+						if (pt.x > maxPt.x)
+							maxPt = pt;
+					}
+				}
+				
+				// use the rightmost and leftmost convex hull points and 
+				// interpolate to the opposite wrist points
+				if (wPts.size() > 1){
+					
+					ellipse(minPt.x,minPt.y,5,5);
+					ellipse(maxPt.x,maxPt.y,7,7);
+					
+					// minPt to right wrist
+					minPt.lerp(w1, .5f);					
+					// maxPt to left wrist
+					maxPt.lerp(w0, .6f);
+					
+					ellipse(minPt.x,minPt.y,5,5);
+					ellipse(maxPt.x,maxPt.y,7,7);
+					
+					// find and send 3D point to World3D
+					int x = (int) minPt.x;
+					int y = (int) minPt.y;
+					PVector palmL3D = context.depthMapRealWorld()[x+y*context.depthWidth()];
+					
+					x = (int) maxPt.x;
+					y = (int) maxPt.y;
+					PVector palmR3D = context.depthMapRealWorld()[x+y*context.depthWidth()];
+					
+					PVector[] pts = new PVector[2];
 
+					pts[0] = palmL3D;
+					pts[1] = palmR3D;
+					world.setWristRotationPts(pts);
+				}
+				
+				/*
+				
+				// get palm points and find midpoint on palm
+				if (wPts.size() > 1 && arm.getPoints().size() > 10){
+					PVector p0 = arm.getPoints().get(palm.get(0)+2);
+					PVector p1 = arm.getPoints().get(palm.get(1)-4);
+								
+					p0.lerp(w0, .5f);
+					p1.lerp(w1, .65f);
+					
+					ellipse(p0.x,p0.y,5,5);
+					ellipse(p1.x,p1.y,5,5);
+					
+					int x = (int) p0.x;
+					int y = (int) p0.y;
+					PVector palmL3D = context.depthMapRealWorld()[x+y*context.depthWidth()];
+					
+					x = (int) p1.x;
+					y = (int) p1.y;
+					PVector palmR3D = context.depthMapRealWorld()[x+y*context.depthWidth()];
+					
+					
+					
+					PVector[] pts = new PVector[2];
+
+					pts[0] = palmL3D;
+					pts[1] = palmR3D;
+					world.setWristRotationPts(pts);
+				}
+				
+				
+				*/
+				
+				/*
+				 * Check the angle of rotation of the wrist
+				 */
+//				println(canvasArm.getHandYZSlope());
+//				println();
 				
 				/*
 				 * 	Find the canvasHand
@@ -448,6 +565,7 @@ public class DepthCAM extends PApplet{
 			else{
 				canvasArm.isDetected  = false;
 				canvasHand.isDetected = false;
+				canvasArm.stuck = false;
 			}
 			
 			
@@ -552,7 +670,7 @@ public class DepthCAM extends PApplet{
 		}
 		else if (modelingHand.isDetected){
 			modelingHand.isDetected = false;
-			modelingHand.isTouching = false;
+//			modelingHand.isTouching = false;
 			modelingHand.isPinching = false;
 			modelingHand.isScaling  = false;
 			canvasArm.isScaling 	= false;
@@ -580,32 +698,22 @@ public class DepthCAM extends PApplet{
 
 		if (key == 'f')
 			freeze = !freeze;
+		
+		if (key == 'r'){	// 'r' for reset
+			canvasArm.stuck = !canvasArm.stuck;
+		}
 
 	}
 	
-	/**
-	 * Returns the distance squared between two vectors.
-	 * 
-	 * @param a
-	 * @param b
-	 * @return distance squared
-	 */
-	private float distanceSq(PVector a, PVector b){				
-		return (b.x - a.x)*(b.x - a.x) + (b.y - a.y)*(b.y - a.y) + (b.z - a.z)*(b.z - a.z);
-	}
-	
-	
-private class Forearm{
+	private class Forearm{
 		
 		private boolean isDetected = false;
 		
 		private ArrayList<ArrayList<PVector>> armPts = new ArrayList<ArrayList<PVector>>();
 		private ArrayList<ArrayList<PVector>> rwpArmPts = new ArrayList<ArrayList<PVector>>();
-		private ArrayList<ArrayList<PVector>> prevScan = new ArrayList<ArrayList<PVector>>();
 		
-		private PVector[] corners = new PVector [4];
-		private PVector[] rwps	  = new PVector [4];
-		
+		private PVector[] canvas   = new PVector [4];
+		private PVector[] canvas3D = new PVector [4];		
 		
 		private int smoothing = 2;
 		private int counter = 0;
@@ -615,12 +723,13 @@ private class Forearm{
 		
 		// SCALING DETECTION
 		private boolean isScaling = false;
-		private PVector[] fixedCorners = new PVector[4];	// persistent reference to original corners of the forearm
-		private Float[] scaledCorners  = new Float[4];	 	// holds the evaluation floats (t) for the scaled forearm
-		private boolean stickMode = false;					// makes the scaledCorners stay after scaling is done
+		private PVector[] trueCorners = new PVector[4];		// persistent reference to original corners of the forearm
+		private PVector[] trueCorners3D = new PVector[4];
+		private Float[] lerpCorners  = new Float[4];	 	// holds the interpolation floats (t) for the scaled forearm
+		private boolean stuck = false;						// makes the scaledCorners stay after scaling is done
 			
-		private PVector axisA = new PVector();
-		private PVector axisB = new PVector();
+		private PVector axisA = new PVector();				// WRIST
+		private PVector axisB = new PVector();				// ELBOW
 		
 
 		private Rectangle bb = new Rectangle();
@@ -630,20 +739,24 @@ private class Forearm{
 			for (int i=0; i<4; i++){
 				armPts.add(new ArrayList<PVector>());
 				rwpArmPts.add(new ArrayList<PVector>());
-				corners[i] = new PVector();
-				rwps[i] = new PVector();
+				
+				trueCorners[i] 	 = new PVector();
+				trueCorners3D[i] = new PVector();
+				canvas[i] 	= new PVector();
+				canvas3D[i] = new PVector();
 			}
-			
-			prevScan.add(new ArrayList<PVector>());
-			prevScan.add(new ArrayList<PVector>());
-	
-			for (int i=0; i<5; i++){
-				prevScan.get(0).add(new PVector());
-				prevScan.get(1).add(new PVector());
-			}
-			
+		
+			lerpCorners[0] = 1f;
+			lerpCorners[1] = 1f;
+			lerpCorners[2] = 0f;
+			lerpCorners[3] = 0f;
 		}
 		
+		/**
+		 * Add true corners to be averaged.
+		 * 
+		 * @param pts - true corners
+		 */
 		public void addCorners(ArrayList<PVector> pts){
 			
 			for (int i=0; i<4; i++){
@@ -668,8 +781,9 @@ private class Forearm{
 		}
 
 		/**
-		 * Find average 2D and 3D points for the forearm.
+		 * Find average the true 2D and 3D corners of the forearm.
 		 * 
+		 * Find the canvas area
 		 */
 		private void avgCorners() {		
 			
@@ -703,16 +817,38 @@ private class Forearm{
 					}
 					
 					p.div(list.size());
-					corners[i] = p;
+					trueCorners[i] = p;
 
+					// set a smoothed z-value
 					rwp.div(list.size() - offset); // ignore 0 readings
-					rwp.z = rwp.z;
-					rwps[i] = rwp; 
+					trueCorners3D[i] = rwp; 
 					
 				}
 			}
-
+			
+			// find the canvas area
+			PVector a = trueCorners[0].get();		// wrist left
+			PVector b = trueCorners[2].get();		// elbow left
+			PVector c = trueCorners[1].get();		// wrist right
+			PVector d = trueCorners[3].get();		// elbow right
+			
+			canvas[0] = PVector.lerp(b, a, lerpCorners[0]);
+			canvas[1] = PVector.lerp(d, c, lerpCorners[1]);
+			canvas[2] = PVector.lerp(b, a, lerpCorners[2]);
+			canvas[3] = PVector.lerp(d, c, lerpCorners[3]);
+			
+			// find 3D canvas area
+			a = trueCorners3D[0].get();		// wrist left
+			b = trueCorners3D[2].get();		// elbow left
+			c = trueCorners3D[1].get();		// wrist right
+			d = trueCorners3D[3].get();		// elbow right
+					
+			canvas3D[0] = PVector.lerp(b, a, lerpCorners[0]);
+			canvas3D[1] = PVector.lerp(d, c, lerpCorners[1]);
+			canvas3D[2] = PVector.lerp(b, a, lerpCorners[2]);
+			canvas3D[3] = PVector.lerp(d, c, lerpCorners[3]);
 		}
+		
 		
 		/**
 		 * Interpolates two sets of 2D points between wrist points and elbow points. <br/> 
@@ -728,7 +864,8 @@ private class Forearm{
 
 			isScaling();
 			
-			findTouch();
+			if (!threeD)
+				findTouch();
 					
 			ArrayList<ArrayList<PVector>> temp = new ArrayList<ArrayList<PVector>>();
 			temp.add(new ArrayList<PVector>()); // wrist points
@@ -738,9 +875,9 @@ private class Forearm{
 
 			PVector[] array = new PVector[4];
 			if (threeD)
-				array = rwps;
+				array = canvas3D;
 			else
-				array = corners;
+				array = canvas;
 			
 			PVector p0 = array[0];
 			PVector p1 = array[1];
@@ -780,35 +917,48 @@ private class Forearm{
 						temp.get(1).add(new PVector(x1,y1,z1));
 					}
 	
+					// draw the 2D scanPt
+					if (i == res/2 && !threeD){
+						pushStyle();
+						fill(255,0,0);
+						ellipse(x0,y0,7,7);
+						ellipse(x1,y1,7,7);
+						popStyle();
+					}
 				}
 										
 			}
 			
 			if (!threeD){
 				
-				// Set axes
-				axisA = temp.get(0).get(1);
+				// Set FOREARM axes
+				axisA.x = (trueCorners[0].x - trueCorners[1].x) *.5f + trueCorners[1].x;
+				axisA.y = (trueCorners[0].y - trueCorners[1].y) *.5f + trueCorners[1].y;
 				int x = (int) axisA.x;
 				int y = (int) axisA.y;
 				axisA.z = context.depthMapRealWorld()[x + y * context.depthWidth()].z;
-				axisB = temp.get(1).get(1);
+				
+				axisB.x = (trueCorners[2].x - trueCorners[3].x) *.5f + trueCorners[3].x;
+				axisB.y = (trueCorners[2].y - trueCorners[3].y) *.5f + trueCorners[3].y;
 				x = (int) axisB.x;
 				y = (int) axisB.y;
-				axisB.z = context.depthMapRealWorld()[x + y * context.depthWidth()].z;
+				axisB.z = context.depthMapRealWorld()[x + y * context.depthWidth()].z;				
 				
-				// set bounding box
-				bb.x = (int) min(corners[0].x, corners[2].x);
-				bb.x = (int) min(bb.x, corners[3].x);
-				bb.y = (int) min(corners[0].y, corners[2].y);
-				bb.y = (int) min(bb.y, corners[3].y);
-				bb.width  = (int) max(corners[1].x - bb.x, corners[2].x - bb.x);
-				bb.width  = (int) max(bb.width,corners[3].x - bb.x);
-				bb.height = (int) max(corners[0].y - bb.y, corners[1].y - bb.y);
+				
+				// set CANVAS bounding box
+				bb.x = (int) min(canvas[0].x, canvas[2].x);
+				bb.x = (int) min(bb.x, canvas[3].x);
+				bb.y = (int) min(canvas[0].y, canvas[2].y);
+				bb.y = (int) min(bb.y, canvas[3].y);
+				bb.width  = (int) max(canvas[1].x - bb.x, canvas[2].x - bb.x);
+				bb.width  = (int) max(bb.width,canvas[3].x - bb.x);
+				bb.height = (int) max(canvas[0].y - bb.y, canvas[1].y - bb.y);
 				// add a little offset
 				bb.x -= 10;
 				bb.width += 20;
 				bb.y -= 10;
 				bb.height += 20;
+				
 				
 				pushStyle();
 				strokeWeight(3);
@@ -839,12 +989,12 @@ private class Forearm{
 			if (!near && canvasArm.isDetected && canvasArm.bb.x > 0){
 
 				// down sample the depth map
-				int step = 5;
+				int step = 3;
 				ArrayList<PVector> depth = new ArrayList<PVector>();
 
 				// create a new point with the depthMap as the Z-value
-				for (int x=canvasArm.bb.x; x<canvasArm.bb.x+canvasArm.bb.width; x+=step){
-					for (int y=0; y<canvasArm.bb.y+canvasArm.bb.height; y+=step){					
+				for (int x=bb.x; x<bb.x+bb.width; x+=step){
+					for (int y=max(0, bb.y); y<bb.y+bb.height; y+=step){					
 						int index = x + y * context.depthWidth();
 						int z = context.depthMap()[index];
 
@@ -860,172 +1010,147 @@ private class Forearm{
 			
 			
 		
-			pushStyle();
-		
-			stroke(61,153,113);
-			strokeWeight(2);
-			beginShape();
-			for (PVector p : lowResArmPts)
-				point(p.x,p.y);
-			endShape(POINT);
+//			pushStyle();
+//		
+//			stroke(61,153,113);
+//			strokeWeight(2);
+//			beginShape();
+//			for (PVector p : lowResArmPts)
+//				point(p.x,p.y);
+//			endShape(POINT);
+//			
+//			popStyle();
 			
-			// check with we have an index finger and check how close it is
-			if (modelingHand.isDetected && near && modelingHand.fingers[1] != null){
-				PVector p0 = modelingHand.fingers[1];
-				
-				int touchCount = 0;
-				float dist = 25f; 
-				for (int i=0; i<lowResArmPts.size(); i++){
-					PVector p1 = lowResArmPts.get(i);	
-					if (distanceSq(p0,p1) < dist*dist){
-//						println("forearm pt: "+p1);
-//						println("hand pt   : "+p0);
-//						println("distance  : "+distanceSq(p0,p1));
-//						println();
-						pushStyle();
-						stroke(255,0,0);
-						line(p1.x,p1.y,p0.x,p0.y);
-						popStyle();
-						touchCount++;
-					}
-				}
+			/*
+			 *  CHECK FOR TOUCH
+			 */	
+			if (modelingHand.isDetected  && near){
 
-				if (touchCount > 0){
-					modelingHand.isTouching = true;
-					world.isTouching(true);
-//					if (isScaling)
-//						stickMode = true;
-//					else
-//						stickMode = false;
-				}
-				else if (modelingHand.isTouching){
-					modelingHand.isTouching = false;
-					world.isTouching(false);
-//					stickMode = true; // leave it on
-				}
-//				println("sticking: "+stickMode);
+				for (Touch t : modelingHand.touchPts){
+					
+					if (modelingHand.fingers[t.id] != null){
+						t.findTouch(lowResArmPts);
+//						if (t.pressed || t.released){
+//							println(t.toString());						
+//						}
+						
+						if (t.released)
+							stuck = true;
+					}
+				} 
+//				println("------");
 			}
-			popStyle();
 			
+		
 			
 		}
 
-		
 		
 		/**
-		 * Scales the canvas area of the forearm based on the location of the two fingers of the modeling hand.
-		 * <br/><br/>
-		 * (1) Find the horizontal intersection point of the two fingers and the left and right side.	<br/>
-		 * (2) Find and store that point's (t) along the left and right side.							<br/>
-		 * (3) Evaluate the left and right side at (t) and add the new corner to the averaging array.	
+		 * Finds the canvas area as a set interpolation factors from scaling the forearm.
 		 */
-		public void getScaledForearm(){
+		public void findCanvasArea(){
 
+			// update the interpolation factors if scaling
+			if ((isScaling && !stuck && modelingHand.fingers[0] != null && modelingHand.fingers[1] != null) ||
+					(stuck && modelingHand.isTouching && modelingHand.fingers[0] != null && modelingHand.fingers[1] != null)){
+				
 				int minThickness = 15;
-
-				PVector a,b,c,d;
-				float t0 = 0,t1 = 0,t2 = 0,t3 = 0;
-						
-				a = fixedCorners[0].get();		// wrist left
-				b = fixedCorners[2].get();		// elbow left
-				c = fixedCorners[1].get();		// wrist right
-				d = fixedCorners[3].get();		// elbow right
 				
-				// don't update the t-values, if we want the canvas area to remain scaled				
-				if (isScaling){
-					
-					// LEFT SIDE
-					float m = (b.y - a.y) / (b.x - a.x);
+				// find the canvas area
+				PVector a = trueCorners[0].get();		// wrist left
+				PVector b = trueCorners[2].get();		// elbow left
+				PVector c = trueCorners[1].get();		// wrist right
+				PVector d = trueCorners[3].get();		// elbow right
+				
+				
+				/*
+				 *  scale the LEFT SIDE
+				 */
+				float m = (b.y - a.y) / (b.x - a.x);
 
-					line(a.x,a.y,b.x,b.y); // to check we're at the proper points in the forearm
+				line(a.x,a.y,b.x,b.y); // to check we're at the proper points in the forearm
 
-					// (y-y1) = m(x-x1)	
-					float x0 = (modelingHand.fingers[1].y - b.y) / m + b.x;			
-					float y0 = min(modelingHand.fingers[1].y,a.y);
+				// (y-y1) = m(x-x1)	
+				float x0 = (modelingHand.fingers[1].y - b.y) / m + b.x;			
+				float y0 = min(modelingHand.fingers[1].y,a.y);
 
-					float x1 = (modelingHand.fingers[0].y - b.y) / m + b.x;
-					float y1 =  max(modelingHand.fingers[0].y,b.y);
-					y1 = min(y1, y0-minThickness);
+				float x1 = (modelingHand.fingers[0].y - b.y) / m + b.x;
+				float y1 =  max(modelingHand.fingers[0].y,b.y);
+				y1 = min(y1, y0-minThickness);
+				
+				PVector w0 = new PVector(x0,y0);
+				PVector e0 = new PVector(x1,y1);;
+				// find the evaluation points of (x0,y0) and (x1,y1)
+				float t0 = w0.dist(b) / a.dist(b);			
+				float t1 = e0.dist(b) / a.dist(b);
+				
+				pushStyle();
+				noStroke();
+				fill(255,0,0);
+				ellipse(w0.x,w0.y,5,5);
+				ellipse(e0.x,e0.y,7,7);
+				popStyle();
+				
+				
+				/*
+				 *  scale the RIGHT SIDE
+				 */
+				// RIGHT SIDE
+				m = (d.y - c.y) / (d.x - c.x);
+				
+				line(c.x,c.y,d.x,d.y);
+				
+				float x2 = (modelingHand.fingers[1].y - c.y) / m + c.x;			
+				float y2 = min(modelingHand.fingers[1].y,c.y);
 
-					PVector w0 = new PVector(x0,y0);
-					PVector e0 = new PVector(x1,y1);;
-					// find the evaluation points of (x0,y0) and (x1,y1)
-					t0 = w0.dist(b) / a.dist(b);			
-					t1 = e0.dist(b) / a.dist(b);
+				float x3 = (modelingHand.fingers[0].y - d.y) / m + d.x;
+				float y3 =  max(modelingHand.fingers[0].y,d.y);
+				y3 = min(y3, y2-minThickness);
 
-					pushStyle();
-					noStroke();
-					fill(255,0,0);
-					ellipse(w0.x,w0.y,5,5);
-					ellipse(e0.x,e0.y,7,7);
-					popStyle();
+				PVector w1 = new PVector(x2,y2);
+				PVector e1 = new PVector(x3,y3);;
+				// find the evaluation points of (x0,y0) and (x1,y1)
+				float t2 = w1.dist(d) / c.dist(d);			
+				float t3 = e1.dist(d) / c.dist(d);
 
-
-					// RIGHT SIDE
-					m = (d.y - c.y) / (d.x - c.x);
-					float x2 = (modelingHand.fingers[1].y - c.y) / m + c.x;			
-					float y2 = min(modelingHand.fingers[1].y,c.y);
-
-					float x3 = (modelingHand.fingers[0].y - d.y) / m + d.x;
-					float y3 =  max(modelingHand.fingers[0].y,d.y);
-					y3 = min(y3, y2-minThickness);
-
-					PVector w1 = new PVector(x2,y2);
-					PVector e1 = new PVector(x3,y3);;
-					// find the evaluation points of (x0,y0) and (x1,y1)
-					t2 = w1.dist(d) / c.dist(d);			
-					t3 = e1.dist(d) / c.dist(d);
-
-					pushStyle();
-					noStroke();
-					fill(255,0,0);
-					ellipse(w1.x,w1.y,5,5);
-					ellipse(e1.x,e1.y,7,7);
-					popStyle();
-
-					line(c.x,c.y,d.x,d.y);				
+				pushStyle();
+				noStroke();
+				fill(255,0,0);
+				ellipse(w1.x,w1.y,5,5);
+				ellipse(e1.x,e1.y,7,7);
+				popStyle();
 
 
-					// update t-values
-
-					if (canvasArm.getXYSlope() < -1){
-						scaledCorners[0] = t0;
-						scaledCorners[1] = t2;
-						scaledCorners[2] = t1;
-						scaledCorners[3] = t3;
-					}
-					else{
-						scaledCorners[0] = t0;
-						scaledCorners[1] = t2;
-						scaledCorners[2] = t3;
-						scaledCorners[3] = t1;					
-					}
-					
+				// set the interpolation factors
+				if (canvasArm.getXYSlope() < -1){
+					lerpCorners[0] = t0;
+					lerpCorners[1] = t2;
+					lerpCorners[2] = t1;
+					lerpCorners[3] = t3;
 				}
-		
-				ArrayList<PVector> corners = new ArrayList<PVector>();
-				corners.add(PVector.lerp(b, a, scaledCorners[0]));
-				corners.add(PVector.lerp(d, c, scaledCorners[1]));
-				corners.add(PVector.lerp(b, a, scaledCorners[2]));
-				corners.add(PVector.lerp(d, c, scaledCorners[3]));
-
-				addCorners(corners);
-				
-				println("isScaling: "+isScaling);
-				println("t0: "+scaledCorners[0]);
-				println("t1: "+scaledCorners[1]);
-				println("t2: "+scaledCorners[2]);
-				println("t3: "+scaledCorners[3]);
-				println();
-				
-				// show original corners
-				for (int i=0; i<fixedCorners.length; i++){
-					int radius = ((i+1)*i)+15;
-					if(fixedCorners[i] != null)
-						ellipse(fixedCorners[i].x,fixedCorners[i].y,radius,radius);
+				else{
+					lerpCorners[0] = t0;
+					lerpCorners[1] = t2;
+					lerpCorners[2] = t3;
+					lerpCorners[3] = t1;					
 				}
+	
+				
+			}
 
+
+			
+			// if not scaling or sticking, reset the interpolation factors
+			else if (!isScaling && !stuck){
+				lerpCorners[0] = 1f;
+				lerpCorners[1] = 1f;
+				lerpCorners[2] = 0f;
+				lerpCorners[3] = 0f;
+			}
 		}
+		
+		
 	
 		/**
 		 * Checks if the modelingHand is trying to scale the canvas area of the forearm
@@ -1034,18 +1159,19 @@ private class Forearm{
 		 */
 		private boolean isScaling(){
 			
-			if (modelingHand.isDetected && near && !modelingHand.isPinching && modelingHand.fingers[0] != null && modelingHand.fingers[1] != null){
-				isScaling = true;
-				modelingHand.isScaling = true;
-				world.isScaling(true);
-				stickMode = true;
-			}
-			else if (isScaling){
-				isScaling = false;
-				modelingHand.isScaling = false;
-				world.isScaling(false);
-			}
+//			if (modelingHand.isDetected && near && !modelingHand.isPinching && modelingHand.fingers[0] != null && modelingHand.fingers[1] != null){
+//				isScaling = true;
+//				modelingHand.isScaling = true;
+//				world.isScaling(true);
+//			}
+//			else if (isScaling){
+//				isScaling = false;
+//				modelingHand.isScaling = false;
+//				world.isScaling(false);
+//			}
 			
+			// override isScaling for now
+			isScaling = false;
 			
 			return isScaling;
 			
@@ -1060,413 +1186,408 @@ private class Forearm{
 		 * 3 = elbowRight	
 		 * @return array of the averaged 4 corners of the forearm
 		 */
-		public PVector[] getCorners(){
-			return corners;
+		public PVector[] getCanvas(){
+			return canvas;
 		}
 		
 		public float getXYSlope(){
 			return (axisB.y - axisA.y) /  (axisB.x - axisA.x);
 		}
 		
+		public float getXZSlope(){
+			pushStyle();
+			strokeWeight(5);
+			stroke(255,0,0);
+			line(axisA.x,axisA.y,trueCorners[0].x,trueCorners[0].y);
+			popStyle();
+			
+			return (axisA.z - trueCorners3D[0].z) /  (axisA.x - trueCorners[0].x);
+		}
+		
 		public float getYZSlope(){
 			return (axisB.z - axisA.z) /  (axisB.y - axisA.y);
 		}
 
-		
-	}
-	
-	
-
-private class Hand {
-	
-	private static final int CANVAS   = 0;
-	private static final int MODELING = 1;
-
-	// GESTURES
-	private boolean isDetected = false;
-	private boolean isTouching = false;
-	private boolean isFlipped  = false;		// isFlipped is true when thumb is on the right side
-	private boolean isPinching = false;
-	private boolean isScaling  = false;
-	private boolean isClosed   = false;
-	
-	private PVector touchPt = new PVector(); 
-	private ArrayList<PVector> pinchPts = new ArrayList<PVector>();
-	
-	// for averaging points
-	private ArrayList<ArrayList<PVector>> handPts = new ArrayList<ArrayList<PVector>>();	
-	private ArrayList<ArrayList<PVector>> rwHandPts = new ArrayList<ArrayList<PVector>>();
-	private int smoothing = 2;
-	private int counter = 0;
-	
-	// averaged points
-	private PVector[] fingers = new PVector [5];
-	private PVector[] rwps	  = new PVector [5];
-	
-	private Rectangle bb = new Rectangle();
-	
-	private boolean display = true;
-	
-	
-
-	/**
-	 * Hand object that:			<br/>
-	 * 	- Tracks Gestures			<br/>
-	 * 	- Detects / IDs fingers		<br/>
-	 * 	- Stores Real-World Points to share with World3D
-	 */
-	public Hand(){
-		
-		for (int i=0; i<5; i++){
-			handPts.add(new ArrayList<PVector>());
-			rwHandPts.add(new ArrayList<PVector>());
-
-		}
 
 	}
 	
-	/**
-	 * Detects fingertips within the hand bounding box.
-	 * 
-	 * @param c - polygon approximation of contour detected in mask.
-	 * @param mode	- 0 = canvasHand, 1 = modelingHand
-	 */
-	private void detectTips(Contour c, int mode) {
-		
-		PVector p,s,e;
-		ArrayList<PVector> tips = new ArrayList<PVector>();
-		
-		c.getConvexHull().draw();
-		
-		for (int i=1; i<c.numPoints()-1; i++){		
 
-			p = new PVector(c.getPoints().get(i).x, c.getPoints().get(i).y, c.getPoints().get(i).z);
-			
-			// search if our point is inside our hand's bounding box
-			if (bb.contains(p.x,p.y)){
-				 
-				// ignore points that are too close to a convex hull point (was useful for modelingHand)
-				boolean contains = false;
-				float minDist = Float.MAX_VALUE;
-				int distThresh = 5;
-				
-				for (int j=0; j<c.getConvexHull().numPoints(); j++){
-					PVector v0 = c.getConvexHull().getPoints().get(j);				
-					float dist = p.dist(v0);					
-					if (dist < 2){
-						// we're at a convex hull point
-						contains = true;		
-					}
-					else if (dist < minDist)
-						minDist = dist;	
-				}
-				
-				
-				// ignore any hull point in the far half of the hand region				
-				if (mode == MODELING ){
-					
-					if ((isFlipped && p.x < bb.x+bb.width/2) || 
-					   (!isFlipped && p.x > bb.x+bb.width/2)	){
-						contains = false;	
-						minDist = distThresh;
-					}
-					
-				}
-				
-				
-				
-				float theta = 0;
-				
-				// if p is a candidate point
-				if (contains || minDist > distThresh){
-					
-					s = new PVector(c.getPoints().get(i-1).x,c.getPoints().get(i-1).y, c.getPoints().get(i-1).z);
-					e = new PVector(c.getPoints().get(i+1).x,c.getPoints().get(i+1).y, c.getPoints().get(i+1).z);
 
-					PVector start = PVector.sub(s,p);
-					PVector end = PVector.sub(e,p);
-					theta = PVector.angleBetween(start, end);
-					
-//					println("i: "+i+", p.dist(s): "+p.dist(s)+", p.dist(e): "+p.dist(e)+", threshold:"+threshold);					
-					
-					float threshold;
-					if (mode == MODELING)
-						threshold = radians(105);
-					else
-						threshold = radians(95);
-					
-					
-					// acute angles are tips and valleys
-					if (theta < threshold){ 
-						
-						// inset the detected tip along the finger to stablize readings 
-						start.normalize();							
-						start.mult(10);
-						end.normalize();
-						end.mult(10);
-						
-						start.add(p);
-						end.add(p);
-						
-						tips.add(PVector.lerp(start, end, .5f));						
-//						tips.add(p);	
-					}
-					
-				}
+	private class Hand {
+
+		private static final int CANVAS   = 0;
+		private static final int MODELING = 1;
+
+		// GESTURES
+		private boolean isDetected = false;
+		private boolean isTouching = false;
+		private boolean isFlipped  = false;		// isFlipped is true when thumb is on the right side
+		private boolean isPinching = false;
+		private boolean isScaling  = false;
+		private boolean isClosed   = false;
+
+		// for averaging points
+		private ArrayList<ArrayList<PVector>> handPts = new ArrayList<ArrayList<PVector>>();	
+		private ArrayList<ArrayList<PVector>> rwHandPts = new ArrayList<ArrayList<PVector>>();
+		private int smoothing = 2;
+		private int counter = 0;
+
+		// averaged points
+		private PVector[] fingers = new PVector [5];
+		private PVector[] rwps	  = new PVector [5];
+
+		private Rectangle bb = new Rectangle();
+
+
+		private ArrayList<Touch> touchPts = new ArrayList<Touch>();
+
+
+		/**
+		 * Hand object that:			<br/>
+		 * 	- Tracks Gestures			<br/>
+		 * 	- Detects / IDs fingers		<br/>
+		 * 	- Stores Real-World Points to share with World3D
+		 */
+		public Hand(int mode){
+
+			for (int i=0; i<5; i++){
+				handPts.add(new ArrayList<PVector>());
+				rwHandPts.add(new ArrayList<PVector>());
+			}
+
+			if (mode == MODELING){
+				touchPts.add(new Touch(1));
+				touchPts.add(new Touch(0));
 			}
 		}
-		
-		
-		/*
-		 * Finger tips WILL be convex hull points.
-		 * Convex hull points MAY NOT be finger tips.
+
+		/**
+		 * Detects fingertips within the hand bounding box.
 		 * 
-		 * Compare found finger tips against convex hull points to verify.
+		 * @param c - polygon approximation of contour detected in mask.
+		 * @param mode	- 0 = canvasHand, 1 = modelingHand
 		 */
-		ArrayList<PVector> valleys = new ArrayList<PVector>();
-		for (int i=0; i<tips.size(); i++){
-			PVector v = tips.get(i);
-			
-			boolean contains = false;
-			for (int j=0; j<c.getConvexHull().numPoints(); j++){
-				PVector v0 = c.getConvexHull().getPoints().get(j);
-				if (v.dist(v0) < 15)
-					contains = true;
-			}
-			
-			if (!contains){
-				valleys.add(v);
-				tips.remove(i);
-				i--;
-			}
-			
-		}
-		
-		// for debugging
-//		if (valleys.size() > 0){
-//			fill(154,20,204);
-//			noStroke();
-//			for (PVector pv : valleys)
-//				ellipse(pv.x,pv.y, 5,5);
-//		}
-//		
-//		if (tips.size() > 0){
-//			fill(255,0,127,150);
-//			for (PVector pv : tips)
-//				ellipse(pv.x,pv.y, 15,15);
-//		}
-		
-//		println("Number of fingers detected: "+tips.size());
-		
-		
-		
-		
-		/*
-		 * Check if the hand is open or closed, then classify detected tips
-		 */
-		
-		if (tips.size() == 0 && !isDetected){
-			isClosed = true;
-			// reset averaging arrays
-			for (int i=0; i<handPts.size(); i++){
-				handPts.get(i).clear();
-				rwHandPts.get(i).clear();
-				counter = 0;
-			}
-		}
-		else if (isClosed)
-			isClosed = false;
-		
+		private void detectTips(Contour c, int mode) {
 
-		classifyFingers(tips, mode);
-		
-	
-	}
-	
-	/**
-	 * IDs fingers:
-	 * 
-	 * 	The goal is to have stable detection for primary fingers (index, thumb, pinky);
-	 *  not trying to get every possible combination of detected fingers.
-	 * 
-	 * <b> MAYBE ADD MODE FOR MODELING vs CANVAS HAND ? </b>
-	 * @param tips	- detected fingers
-	 * @param mode	- 0 = canvasHand, 1 = modelingHand
-	 */
-	private void classifyFingers(ArrayList<PVector> tips, int mode) {
-		
-		ArrayList<PVector> hand = new ArrayList<PVector>();
-		for (int i=0; i<5; i++)
-			hand.add(new PVector());	
-		
-		// assume one finger is the index
-		if (tips.size() == 1) {
-			hand.set(1, tips.get(0));
-		}
-		
-		// check for thumb / index, index / middle, thumb / pinky
-		if (tips.size() == 2) {
-			
-			// assume thumb / pinky
-			if (mode == CANVAS){
-				hand.set(0, tips.get(0));
-				hand.set(4, tips.get(1));
-			}
-			
-			// should look at differentiating thumb / index or index / middle,
-			// but for now assume thumb / index 
-			else{
-				hand.set(0, tips.get(1));
-				hand.set(1, tips.get(0));
-			}
-			
-		}		
-		
-		if (tips.size() == 3){
-			// just assign thumb / index 
-			if (mode == MODELING) {
-				hand.set(0, tips.get(1));
-				hand.set(1, tips.get(0));
-			}
-			// just assign thumb / pinky 
-			else{
-				hand.set(0, tips.get(0));
-				hand.set(4, tips.get(2));
-			}
-			
-		}		
-		
-		if (tips.size() == 4){
-			// just assign thumb / index 
-			if (mode == MODELING) {
-				hand.set(0, tips.get(1));
-				hand.set(1, tips.get(0));
-			}
-			// just assign thumb / pinky 
-			else{
-				hand.set(0, tips.get(0));
-				hand.set(4, tips.get(2));
-			}
-			
-		}
-		
-		if (tips.size() == 5) {
-			hand.set(0, tips.get(0));
-			hand.set(1, tips.get(1));
-			hand.set(2, tips.get(2));
-			hand.set(3, tips.get(3));
-			hand.set(4, tips.get(4));			
-		}
-		
-		addFingers(hand);			
-	}
+			PVector p,s,e;
+			ArrayList<PVector> tips = new ArrayList<PVector>();
 
-	/**
-	 * Add detected fingers to our smoothing array, and find the averaged points. <br/>
-	 * 
-	 * @param pts - raw 2D points to add
-	 */
-	private void addFingers(ArrayList<PVector> pts){
-		
-		for (int i=0; i<5; i++){
-			PVector v = pts.get(i);
-			int x = (int) v.x; 
-			int y = (int) v.y;
-			// set Z-value for 2D points too
-			int z = (int) context.depthMapRealWorld()[x+y*context.depthWidth()].z;
-			
-			if (counter < smoothing){
-				handPts.get(i).add(new PVector(v.x,v.y,z));
-				rwHandPts.get(i).add(context.depthMapRealWorld()[x+y*context.depthWidth()]);
-			}
-			else{
-				handPts.get(i).set(counter%smoothing, pts.get(i));
-				rwHandPts.get(i).set(counter%smoothing, context.depthMapRealWorld()[x+y*context.depthWidth()]);
-			}
-		}
+			c.getConvexHull().draw();
 
-		avgFingers();
+			for (int i=1; i<c.numPoints()-1; i++){		
 
-		counter++;
-	}
+				p = new PVector(c.getPoints().get(i).x, c.getPoints().get(i).y, c.getPoints().get(i).z);			
 
-	/**
-	 * Average detected fingers for more stable readings.
-	 */
-	private void avgFingers() {
+				// search if our point is inside our hand's bounding box
+				if (bb.contains(p.x,p.y)){
 
-		for (int i=0; i<5; i++){
-			PVector p = new PVector();
-			ArrayList<PVector> list = new ArrayList<PVector>();
-			PVector rwp = new PVector();
-			ArrayList<PVector> rwpList = new ArrayList<PVector>();
-			
-			int offset = 0;
-			for (int j=0; j<handPts.get(i).size(); j++){
-				
-				PVector v = handPts.get(i).get(j);
-				if (handPts.get(i).get(j).x != 0 && handPts.get(i).get(j).y != 0){
-					list.add(v);
-					
-					int x = (int) v.x; 
-					int y = (int) v.y;
-					PVector v1 = context.depthMapRealWorld()[x + y * context.depthWidth()];
-					rwpList.add(v1);
-					if (v1.z < 1)
-						offset++;
+					// ignore points that are too close to a convex hull point (was useful for modelingHand)
+					boolean contains = false;
+					float minDist = Float.MAX_VALUE;
+					int distThresh = 5;
+
+					for (int j=0; j<c.getConvexHull().numPoints(); j++){
+						PVector v0 = c.getConvexHull().getPoints().get(j);				
+						float dist = p.dist(v0);					
+						if (dist < 2){
+							// we're at a convex hull point
+							contains = true;		
+						}
+						else if (dist < minDist)
+							minDist = dist;	
+					}
+
+
+					// ignore any hull point in the far half of the hand region				
+					if (mode == MODELING ){
+
+						if ((isFlipped && p.x < bb.x+bb.width/2) || 
+								(!isFlipped && p.x > bb.x+bb.width/2)	){
+							contains = false;	
+							minDist = distThresh;
+						}
+
+					}
+
+
+
+					float theta = 0;
+
+					// if p is a candidate point
+					if (contains || minDist > distThresh){
+
+						s = new PVector(c.getPoints().get(i-1).x,c.getPoints().get(i-1).y, c.getPoints().get(i-1).z);
+						e = new PVector(c.getPoints().get(i+1).x,c.getPoints().get(i+1).y, c.getPoints().get(i+1).z);
+
+						PVector start = PVector.sub(s,p);
+						PVector end = PVector.sub(e,p);
+						theta = PVector.angleBetween(start, end);
+
+						//					println("i: "+i+", p.dist(s): "+p.dist(s)+", p.dist(e): "+p.dist(e)+", threshold:"+threshold);					
+
+						float threshold;
+						if (mode == MODELING)
+							threshold = radians(105);
+						else
+							threshold = radians(95);
+
+
+						// acute angles are tips and valleys
+						if (theta < threshold){ 
+
+							// inset the detected tip along the finger to stablize readings 
+							start.normalize();							
+							start.mult(10);
+							end.normalize();
+							end.mult(10);
+
+							start.add(p);
+							end.add(p);
+
+							tips.add(PVector.lerp(start, end, .5f));						
+							//						tips.add(p);	
+						}
+
+					}
 				}
 			}
-			
-			
-			if (list.size() == 0 && (list.size() - offset) == 0){
-				fingers[i] = null;
-				rwps[i] = null;
+
+
+
+
+			/*
+			 * Finger tips WILL be convex hull points.
+			 * Convex hull points MAY NOT be finger tips.
+			 * 
+			 * Compare found finger tips against convex hull points to verify.
+			 */
+			ArrayList<PVector> valleys = new ArrayList<PVector>();
+			for (int i=0; i<tips.size(); i++){
+				PVector v = tips.get(i);
+
+				boolean contains = false;
+				for (int j=0; j<c.getConvexHull().numPoints(); j++){
+					PVector v0 = c.getConvexHull().getPoints().get(j);
+					if (v.dist(v0) < 15)
+						contains = true;
+				}
+
+				if (!contains){
+					valleys.add(v);
+					tips.remove(i);
+					i--;
+				}
+
 			}
-			else{
-				for (int j=0; j<list.size(); j++){
-					p.add(list.get(j));
-					rwp.add(rwpList.get(j));
-				}				
-				
-				rwp.div(list.size() - offset); // ignore 0 readings
-				rwp.z = rwp.z;
-				rwps[i] = rwp;
-				
-				p.div(list.size());
-				p.y = Math.max(0, p.y);	// make sure y is positive
-				p.z = rwp.z;
-				fingers[i] = p;			
-				
+
+
+			/*
+			 * Check if the hand is open or closed, then classify detected tips
+			 */
+
+			if (tips.size() == 0 && !isDetected){
+				isClosed = true;
+				// reset averaging arrays
+				for (int i=0; i<handPts.size(); i++){
+					handPts.get(i).clear();
+					rwHandPts.get(i).clear();
+					counter = 0;
+				}
 			}
+			else if (isClosed)
+				isClosed = false;
+
+
+			classifyFingers(tips, mode);
+
+
 		}
-		
-		
-				
-		
-		/*
-		 * Visualizing the fingers 
+
+		/**
+		 * IDs fingers:
+		 * 
+		 * 	The goal is to have stable detection for primary fingers (index, thumb, pinky);
+		 *  not trying to get every possible combination of detected fingers.
+		 * 
+		 * <b> MAYBE ADD MODE FOR MODELING vs CANVAS HAND ? </b>
+		 * @param tips	- detected fingers
+		 * @param mode	- 0 = canvasHand, 1 = modelingHand
 		 */
-		
-		
-		
+		private void classifyFingers(ArrayList<PVector> tips, int mode) {
+
+			ArrayList<PVector> hand = new ArrayList<PVector>();
+			for (int i=0; i<5; i++)
+				hand.add(new PVector());	
+
+			// assume one finger is the index
+			if (tips.size() == 1) {
+				hand.set(1, tips.get(0));
+			}
+
+			// check for thumb / index, index / middle, thumb / pinky
+			if (tips.size() == 2) {
+
+				// assume thumb / pinky
+				if (mode == CANVAS){
+					hand.set(0, tips.get(0));
+					hand.set(4, tips.get(1));
+				}
+
+				// should look at differentiating thumb / index or index / middle,
+				// but for now assume thumb / index 
+				else{
+//					hand.set(0, tips.get(1));
+					hand.set(1, tips.get(0));
+				}
+
+			}		
+
+			if (tips.size() == 3){
+				// just assign thumb / index 
+				if (mode == MODELING) {
+//					hand.set(0, tips.get(1));
+					hand.set(1, tips.get(0));
+				}
+				// just assign thumb / pinky 
+				else{
+					hand.set(0, tips.get(0));
+					hand.set(4, tips.get(2));
+				}
+
+			}		
+
+			if (tips.size() == 4){
+				// just assign thumb / index 
+				if (mode == MODELING) {
+//					hand.set(0, tips.get(1));
+					hand.set(1, tips.get(0));
+				}
+				// just assign thumb / pinky 
+				else{
+					hand.set(0, tips.get(0));
+					hand.set(4, tips.get(2));
+				}
+
+			}
+
+			if (tips.size() == 5) {
+				hand.set(0, tips.get(0));
+				hand.set(1, tips.get(1));
+				hand.set(2, tips.get(2));
+				hand.set(3, tips.get(3));
+				hand.set(4, tips.get(4));			
+			}
+
+			addFingers(hand);	
+
+
+
+		}
+
+		/**
+		 * Add detected fingers to our smoothing array, and find the averaged points. <br/>
+		 * 
+		 * @param pts - raw 2D points to add
+		 */
+		private void addFingers(ArrayList<PVector> pts){
+
+			for (int i=0; i<5; i++){
+				PVector v = pts.get(i);
+				int x = (int) v.x; 
+				int y = (int) v.y;
+				// set Z-value for 2D points too
+				int z = (int) context.depthMapRealWorld()[x+y*context.depthWidth()].z;
+
+				if (counter < smoothing){
+					handPts.get(i).add(new PVector(v.x,v.y,z));
+					rwHandPts.get(i).add(context.depthMapRealWorld()[x+y*context.depthWidth()]);
+				}
+				else{
+					handPts.get(i).set(counter%smoothing, pts.get(i));
+					rwHandPts.get(i).set(counter%smoothing, context.depthMapRealWorld()[x+y*context.depthWidth()]);
+				}
+			}
+
+			avgFingers();
+
+			counter++;
+		}
+
+		/**
+		 * Average detected fingers for more stable readings.
+		 */
+		private void avgFingers() {
+
+			for (int i=0; i<5; i++){
+				PVector p = new PVector();
+				ArrayList<PVector> list = new ArrayList<PVector>();
+				PVector rwp = new PVector();
+				ArrayList<PVector> rwpList = new ArrayList<PVector>();
+
+				int offset = 0;
+				for (int j=0; j<handPts.get(i).size(); j++){
+
+					PVector v = handPts.get(i).get(j);
+					if (handPts.get(i).get(j).x != 0 && handPts.get(i).get(j).y != 0){
+						list.add(v);
+
+						int x = (int) v.x; 
+						int y = (int) v.y;
+						PVector v1 = context.depthMapRealWorld()[x + y * context.depthWidth()];
+						rwpList.add(v1);
+						if (v1.z < 1)
+							offset++;
+					}
+				}
+
+
+				if (list.size() == 0 && (list.size() - offset) == 0){
+					fingers[i] = null;
+					rwps[i] = null;
+				}
+				else{
+					for (int j=0; j<list.size(); j++){
+						p.add(list.get(j));
+						rwp.add(rwpList.get(j));
+					}				
+
+					rwp.div(list.size() - offset); // ignore 0 readings
+					rwp.z = rwp.z;
+					rwps[i] = rwp;
+
+					p.div(list.size());
+					p.y = Math.max(0, p.y);	// make sure y is positive
+					p.z = rwp.z;
+					fingers[i] = p;			
+
+				}
+			}
+
+
+
+
+			/*
+			 * Visualizing the fingers 
+			 */
+			/*	
 		pushStyle();
 		rectMode(CENTER);
 		noFill();
 		strokeWeight(2);
 		stroke(0,176,204,200);
 		for (int i=0; i<fingers.length; i++){
-			
+
 			if (fingers[i] != null){	
-				
+
 				strokeWeight(2);
 				stroke(0,176,204,200);
 				rect(fingers[i].x, fingers[i].y,15,15);
 				fill(255,0,0);
 				noStroke();
 				ellipse(fingers[i].x, fingers[i].y,3,3);
-				
+
 				String finger;
-				
+
 				if (canvasHand.isFlipped){
 					if (i==0)
 						finger = "PINKY";
@@ -1480,7 +1601,7 @@ private class Hand {
 						finger = "THUMB";
 				}
 				else{
-				
+
 					if (i==0)
 						finger = "THUMB";
 					else if (i==1)
@@ -1491,58 +1612,195 @@ private class Hand {
 						finger = "RING";
 					else
 						finger = "PINKY";
-					
+
 				}
-				
+
 				fill(255);
 				int xOffest = finger.length()/2*7;
 				textFont(font, 16);
 				text(finger, fingers[i].x - xOffest,fingers[i].y+20, 2);
 				noFill();
 			}
-			
+
 		}
 		popStyle();
 
-		
-	}
-	
+			 */
 
-	
-	public ArrayList<String> getGestures(int mode){
-		ArrayList<String> g = new ArrayList<String>();
-		
-		if (isTouching)
-			g.add("TOUCHING");
-		if (isPinching)
-			g.add("PINCHING");
-		if (isScaling)
-			g.add("SCALING");
-		if (isClosed)
-			g.add("CLOSED");
-		if (!isDetected && mode == MODELING)
-			g.add("HAND NOT \nDETECTED");
-		if (!isDetected && mode == CANVAS)
-			g.add("ARM NOT \nDETECTED");
-		
-		return g;
-	}
-	
-	
-	
-	/**
-	 * Flag for when the hand is closed.
-	 * @return whether or not the hand is closed
-	 */
-	public boolean isClosed(){		
-		return isClosed ;
+
+		}
+
+
+
+
+		public ArrayList<String> getGestures(int mode){
+			ArrayList<String> g = new ArrayList<String>();
+
+			if (isTouching)
+				g.add("TOUCHING");
+			if (isPinching)
+				g.add("PINCHING");
+			if (isScaling)
+				g.add("SCALING");
+			if (isClosed)
+				g.add("CLOSED");
+			if (!isDetected && mode == MODELING)
+				g.add("HAND NOT \nDETECTED");
+			if (!isDetected && mode == CANVAS)
+				g.add("ARM NOT \nDETECTED");
+
+			return g;
+		}
+
+
+
+		/**
+		 * Flag for when the hand is closed.
+		 * @return whether or not the hand is closed
+		 */
+		public boolean isClosed(){		
+			return isClosed ;
+		}
+
+
 	}
 
-	
-	
 
-}
-	
-	
+	private class Touch{	
+
+		private ArrayList<PVector> lowResArmPts;
+
+		private boolean pressed  = false;
+		private boolean released = false;
+		private boolean dragged  = false;
+
+		private PVector pos 	 = new PVector();
+		private PVector prevPos  = new PVector();
+
+		private float touchTime  = 0;
+		private int touchCount	 = 0;
+		private float debounce   = 50;
+
+		private int id = -1;
+
+		public Touch(int id){
+			this.id = id;
+			this.touchTime = millis();
+			pressed = true;
+		}
+
+
+		public void findTouch(ArrayList<PVector> lowResArmPts){
+
+
+
+			// check with we have an index finger and check how close it is
+			if (modelingHand.fingers[id] != null){
+				PVector p0 = modelingHand.fingers[id];
+
+				float minDist = Float.MAX_VALUE;
+				int minIndex = -1;		
+				float dist;
+
+
+				// have a bigger threshold for staying touched
+				if (!pressed)
+					dist = 20f;
+				else
+					dist = 25f;
+
+				for (int i=0; i<lowResArmPts.size(); i++){
+					PVector p1 = lowResArmPts.get(i);	
+					float currDist = distanceSq(p0,p1);
+
+					if (currDist < dist*dist){
+
+						if (currDist < minDist){
+							minDist = currDist;
+							minIndex = i;						
+						}
+
+					}
+				}
+
+				if (minIndex != -1){
+
+//					println("touchCount: "+touchCount);
+
+					touchTime = millis();
+
+					pressed  = true;
+					released = false;
+
+					// update the previous points
+					prevPos = pos.get();
+					pos = lowResArmPts.get(minIndex);
+
+					if (distanceSq(pos,prevPos) > dist)
+						dragged = true;
+					else if (dragged)
+						dragged = false;
+
+					// show closed point
+					pushStyle();
+					strokeWeight(2);
+					stroke(255,0,0);
+					line(pos.x,pos.y,p0.x,p0.y);
+					popStyle();
+
+					touchCount++;	
+
+				}
+				else if (millis() - touchTime < debounce){
+					println("deboucing: "+(millis() - touchTime)+" ms");
+					pressed  = true;
+					released = false;	
+				}
+				else if (pressed && touchCount > 0){
+					pressed  = false;
+					released = true;
+					dragged  = false;
+				}
+				else{
+					pressed  = false;
+					released = false;
+					dragged  = false;
+				}
+			}
+			else{
+				pressed  = false;
+				released = false;
+				dragged  = false;
+			}
+
+//			println("in Touch, modelingHand.isTouching: "+modelingHand.isTouching);
+			modelingHand.isTouching = pressed;
+			world.isTouching(pressed);	
+		}
+
+		public String toString(){
+
+			if (!pressed)
+				return "NO TOUCH from id: "+ id + "\npressed: "+ pressed +
+						", released: "+released+", dragged: "+dragged + "\n";	
+
+			else
+				return "TOUCH from id: " + id + ", at " + pos + "\npressed: "+
+				pressed+", released: "+released+", dragged: "+dragged + "\n";		
+		}
+
+		/**
+		 * Returns the distance squared between two vectors.
+		 * 
+		 * @param a
+		 * @param b
+		 * @return distance squared
+		 */
+		private float distanceSq(PVector a, PVector b){				
+			return (b.x - a.x)*(b.x - a.x) + (b.y - a.y)*(b.y - a.y) + (b.z - a.z)*(b.z - a.z);
+		}
+
+	}
+
 
 }

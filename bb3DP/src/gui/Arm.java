@@ -19,6 +19,9 @@ public class Arm {
 	private World3D p5;
 	private VerletPhysics physics;
 	
+	private static final int WRIST = 0;
+	private static final int ELBOW = 1;
+	
 	// 3D SCAN pts from DepthCAM
 	private Vec3D[] wScan = new Vec3D[3];							// wrist control points from the scan
 	private Vec3D[] eScan = new Vec3D[3];							// elbow control points from the scan
@@ -34,14 +37,17 @@ public class Arm {
 	private Vec3D elbowRef = new Vec3D();							// persistent reference to elbow to base scaling
 	
 	private TriangleMesh mesh = new TriangleMesh();
+	private int crvRes = 60;
 
-	// for finding the CANVAS AREA on the arm
-	private ArrayList<Float> wEdge = new ArrayList<Float>();		// for storing/smoothing wrist edge locations
-	private ArrayList<Float> eEdge = new ArrayList<Float>();		// for storing/smoothing elbow edge locations
-	private int smoothing   = 10;
-	private int edgeCounter = 0;
+
 	private ArrayList<Vec3D> wSection = new ArrayList<Vec3D>(); 	// wrist edge for 3D model
 	private ArrayList<Vec3D> eSection = new ArrayList<Vec3D>();		// elbow edge for 3D model
+	Float[] lerp = new Float[4];
+	
+	private float wristRot  = 1;	
+	private float targetRot = 1;
+	private static final int MAX_ROTATION = 45;
+	private Vec3D[] wristRotPts = new Vec3D[2];
 	
 	private boolean initialized = false;
 	private boolean freeze = false;
@@ -52,7 +58,7 @@ public class Arm {
 	private boolean isMoving = false;
 	private boolean isTouching = false;
 	private boolean isScaling = false;
-	
+	private boolean isFlipped = false;
 	
 	public Arm(World3D p5){
 		this.p5 = p5;	
@@ -114,11 +120,23 @@ public class Arm {
 			rig();
 		
 		// update our rig
-		physics.particles.get(4).set(wristRef);
-		physics.particles.get(6).set(elbowRef);
-		wrist.get(0).set(physics.particles.get(5));
-		elbow.get(0).set(physics.particles.get(7));
+		physics.particles.get(0).set(wristRef);
+		physics.particles.get(2).set(elbowRef);
+		wrist.get(0).set(physics.particles.get(1));
+		elbow.get(0).set(physics.particles.get(3));
 		
+		if (wristRotPts[0] != null && wristRotPts[1] != null){
+			physics.particles.get(4).set(wristRotPts[0]);
+			physics.particles.get(6).set(wristRotPts[1]);
+			
+			float diff = physics.particles.get(5).z - physics.particles.get(7).z;
+//			System.out.println(diff);
+			diff /= 10;
+			diff = PApplet.max(diff, -1);
+			diff = PApplet.min(diff,  1);
+			
+			targetRot = diff * MAX_ROTATION;
+		}
 
 		
 		// check if the arm is moving ... NOT USING YET, BUT COULD ... for something!
@@ -146,54 +164,91 @@ public class Arm {
 		float stiff = 1f;
 		
 		// connect the edges of the wrist to the  center (at a lower resolution)
-		VerletParticle p4  = new VerletParticle(wristRef);
-		VerletParticle p5  = new VerletParticle(wrist.get(0));
-		VerletParticle p6  = new VerletParticle(elbowRef);
-		VerletParticle p7  = new VerletParticle(elbow.get(0));
+		VerletParticle p0  = new VerletParticle(wristRef);
+		VerletParticle p1  = new VerletParticle(wrist.get(0));
+		VerletParticle p2  = new VerletParticle(elbowRef);
+		VerletParticle p3  = new VerletParticle(elbow.get(0));
 		
+		// the 0th through 4th particles in the physics world are the FOREARM
+		physics.addParticle(p0);		
+		physics.addParticle(p1);
+		physics.addParticle(p2);
+		physics.addParticle(p3);
+		
+		// add weight
+		p1.setWeight(10);		
+		p3.setWeight(10);
+		
+		physics.addSpring(new VerletConstrainedSpring(p0,p1,20,stiff/2));	// make connection to wrist tighter.
+		physics.addSpring(new VerletSpring(p1,p3,215,.01f)); 			 	// 215 is length of my forearm
+		physics.addSpring(new VerletSpring(p2,p3,10,stiff));
+		
+		VerletParticle p4  = new VerletParticle(5,-5,0);		// wrist left (scan)
+		VerletParticle p5  = new VerletParticle(5,-5,-5);		// wrist left
+		VerletParticle p6  = new VerletParticle(5,5,0);			// wrist right (scan)
+		VerletParticle p7  = new VerletParticle(5,5,-5);		// wrist right
+		
+		// the 5th through 8th particles in the physics world are the WRIST
 		physics.addParticle(p4);		
 		physics.addParticle(p5);
 		physics.addParticle(p6);
 		physics.addParticle(p7);
 		
-//		p0.setWeight(2);
-		p5.setWeight(10);		
-		p7.setWeight(10);
-		
-		physics.addSpring(new VerletConstrainedSpring(p4,p5,20,stiff/2));	// make connection to wrist tighter.
-		physics.addSpring(new VerletSpring(p5,p7,215,.01f)); 			 	// 215 is length of my forearm
-		physics.addSpring(new VerletSpring(p6,p7,10,stiff));
+		// add weight to wrist points
+		p5.setWeight(15);		
+		p7.setWeight(15);
+					
+		// WRIST springs
+		physics.addSpring(new VerletSpring(p4,p5,1,stiff*2));
+		physics.addSpring(new VerletSpring(p6,p7,1,stiff*2));
+		System.out.println("AFTER FOREARM RIGGED: ");
+		System.out.println("particles.size(): "+physics.particles.size());
+		System.out.println("springs.size()  : "+physics.springs.size());
 		
 		initialized = true;
 	}
 	
 	
 	/**
-	 * Centers the scan data around the origin. <br/>
+	 * Centers the scan data around the origin.  <br/>
 	 * Finds the location and orientation of updated arm axis and aligns wrist and elbow sections. <br/>
+	 * Finds the wrist rotation.				 <br/>
 	 * Rebuilds the mesh.						 <br/>
 	 * Finds the new canvas area for Model		 <br/>
 	 */
 	private void regenerate(){
 		
-		if (!isScaling){
+		if (!isScaling && physics.particles.size() > 7){
 			// update centroid of the scan points
 			centroid.x = (wristRef.x - elbowRef.x) * .85f + elbowRef.x;
 			centroid.y = (wristRef.y - elbowRef.y) * .85f + elbowRef.y;
 			centroid.z = (wristRef.z - elbowRef.z) * .85f + elbowRef.z;
-
+			
+			
 			// move scan points and reference points to center on the origin
 			wristRef.subSelf(centroid);
 			elbowRef.subSelf(centroid);
 		}
 		
+
 		wScan[1].subSelf(centroid);
 		eScan[1].subSelf(centroid);
 
+		
+		/*
+		 * Update the position of the wrist rotation points
+		 */
+		if (wristRotPts[0] != null && wristRotPts[1] != null){	
+
+			wristRotPts[0].subSelf(centroid);
+			wristRotPts[1].subSelf(centroid);
+
+		}
+
 		// rotate the edge curves so they align with arm axis
 		findAxes();
-		alignSection(wrist, wristCurve, wristPlane);
-		alignSection(elbow, elbowCurve, elbowPlane);	
+		alignSection(wrist, wristCurve, wristPlane, WRIST);
+		alignSection(elbow, elbowCurve, elbowPlane, ELBOW);	
 		
 		// rebuild the mesh
 		mesh = meshArm();
@@ -266,7 +321,7 @@ public class Arm {
 	 * @param originalPts	-	original, unmodified curve points
 	 * @param targetPlane	-	local axis of edge
 	 */
-	private void alignSection(ArrayList<Vec3D> pts, ArrayList<Vec3D> originalPts,  Vec3D[] targetPlane) {
+	private void alignSection(ArrayList<Vec3D> pts, ArrayList<Vec3D> originalPts,  Vec3D[] targetPlane, int mode) {
 		
 		// move local and target to the origin to perform rotations
 		Vec3D toOrigin = Vec3D.ZERO.sub(pts.get(0));
@@ -313,15 +368,29 @@ public class Arm {
 	
 		
 		/*
-		 *  modify original points by these thetas
+		 *  Modify original points by these thetas
 		 */
 		
 		// find the translation from centroid to origin			
 		Vec3D offset = Vec3D.ZERO.sub(originalPts.get(0));	// get the centroid from the original curve
-	
+		
 		for (int i=1; i<pts.size(); i++){
 			
 			Vec3D p = new Vec3D(originalPts.get(i)); 		// get the point from the original curve
+			
+			// modify wrist by rotation
+			if (mode == WRIST && !isFlipped){
+				p.rotateAroundAxis(Vec3D.Y_AXIS, PApplet.radians(targetRot));
+			}
+			// flip it good!
+			else if (mode == WRIST && isFlipped){
+				p.rotateAroundAxis(Vec3D.Y_AXIS, PApplet.radians(135));
+				p.rotateAroundAxis(Vec3D.Y_AXIS, PApplet.radians(-1*targetRot));
+			}
+			else if (mode == ELBOW && isFlipped){
+				p.rotateAroundAxis(Vec3D.Y_AXIS, PApplet.radians(165));
+			}
+			
 			
 			// translate by offset
 			p.addSelf(offset);
@@ -351,8 +420,8 @@ public class Arm {
 		Vec3D v0, v1, v2, v3;
 		
 		// skip the first point, it's the medial axis 
-		int res = (wrist.size() - 1) / 30;
-		for (int i=1; i<wrist.size()/res; i++){
+		int res = (wrist.size() - 1) / crvRes;
+		for (int i=1; i<crvRes; i++){
 
 			v0 = elbow.get(i*res);
 			v2 = elbow.get((i+1)*res);
@@ -382,74 +451,34 @@ public class Arm {
 	 * 
 	 * Give weight for the wEdge to stay near the wrist
 	 */
-	private void findCanvasArea(){
-					
-		float wPos, ePos;
-		float armLength = wrist.get(0).distanceTo(elbow.get(0));
-		
-		wPos = PApplet.map(wScan[1].y, wrist.get(0).y, elbow.get(0).y, 0.0f, .9f);
-		ePos = PApplet.map(eScan[1].y, wrist.get(0).y, elbow.get(0).y, 0.0f, .9f);
-		
-		
-		// if not scaling, keep the canvas area by the wrist
-		if (!isScaling){			
-			float diff = wPos - .05f;
-			wPos -= diff;
-			ePos -= diff;
-		}
-		
-//		System.out.println("wristRef.y	  : "+wristRef.y);
-//		System.out.println("wrist.get(0).y: "+wrist.get(0).y);
-//		
-//		System.out.println("elbowRef.y	  : "+elbowRef.y);
-//		System.out.println("elbow.get(0).y: "+elbow.get(0).y);
-//		System.out.println("centroid	  :"+centroid);
-//		System.out.println("wScan[1].y	  : "+wScan[1].y);
-//		System.out.println("eScan[1].y	  : "+eScan[1].y);
-//
-//		System.out.println("wPos: "+wPos);
-//		System.out.println("ePos: "+ePos);
-//		System.out.println();
-		
-		if (edgeCounter < smoothing){
-			wEdge.add(wPos);
-			eEdge.add(ePos);
-		}
-		else{
-			wEdge.set(edgeCounter%smoothing,wPos);
-			eEdge.set(edgeCounter%smoothing,ePos);
-		}
+	private void findCanvasArea(){			
 
-		float wSegment = 0;
-		float eSegment = 0;
+		float wSegment = .95f;
+		float eSegment = .05f;
 		
-		for (int i=0; i<wEdge.size(); i++){
-			wSegment += wEdge.get(i);
-			eSegment += eEdge.get(i);
-		}
+		if (lerp[0] != null && lerp[1] != null && lerp[2] != null && lerp[3] != null){
+			wSegment = lerp[0];
+			eSegment = lerp[3];
+		}			
 		
-		wSegment /= wEdge.size();
-		eSegment /= eEdge.size();		
-		edgeCounter++;
-		
-//		System.out.println("wrist location at "+wSegment*100+"%");
-//		System.out.println("elbow location at "+eSegment*100+"%");
-		
+		eSegment = PApplet.max(.05f, eSegment);
+		wSegment = PApplet.min(.95f, wSegment);
+			
 		// create interpolated sections along the arm	
 		wSection.clear();
 		eSection.clear(); 
 		
-		int res = (wrist.size() - 1) / 30;
-		for (int i=1; i<wrist.size()/res+1; i++){
+		int res = (wrist.size()) / crvRes ;
+		for (int i=1; i<=crvRes; i++){
 			
-			float x0 = (elbow.get(i*res).x - wrist.get(i*res).x) * wSegment + wrist.get(i*res).x;
-			float y0 = (elbow.get(i*res).y - wrist.get(i*res).y) * wSegment + wrist.get(i*res).y;
-			float z0 = (elbow.get(i*res).z - wrist.get(i*res).z) * wSegment + wrist.get(i*res).z;
+			float x0 = (wrist.get(i*res).x - elbow.get(i*res).x) * wSegment + elbow.get(i*res).x;
+			float y0 = (wrist.get(i*res).y - elbow.get(i*res).y) * wSegment + elbow.get(i*res).y;
+			float z0 = (wrist.get(i*res).z - elbow.get(i*res).z) * wSegment + elbow.get(i*res).z;
 			wSection.add(new Vec3D(x0,y0,z0));
 			
-			x0 = (elbow.get(i*res).x - wrist.get(i*res).x) * eSegment + wrist.get(i*res).x;
-			y0 = (elbow.get(i*res).y - wrist.get(i*res).y) * eSegment + wrist.get(i*res).y;
-			z0 = (elbow.get(i*res).z - wrist.get(i*res).z) * eSegment + wrist.get(i*res).z;
+			x0 = (wrist.get(i*res).x - elbow.get(i*res).x) * eSegment + elbow.get(i*res).x;
+			y0 = (wrist.get(i*res).y - elbow.get(i*res).y) * eSegment + elbow.get(i*res).y;
+			z0 = (wrist.get(i*res).z - elbow.get(i*res).z) * eSegment + elbow.get(i*res).z;
 			eSection.add(new Vec3D(x0,y0,z0));
 			
 		}
@@ -527,15 +556,35 @@ public class Arm {
 	
 	public void isTouching(boolean flag) {
 		isTouching = flag;
+		
 	}
+	
+	public boolean isTouching(){
+		return isTouching;
+	}
+
 	
 	/**
 	 * Whether or not the modeling hand is scaling the arm's canvas area.
-	 * Set by DepthCAM
+	 * Sent by DepthCAM
 	 * @param flag
 	 */
 	public void isScaling(boolean flag){
-		isScaling = flag;
+		isScaling = false;
 	}
+	
+	public void setFlip(boolean flag){
+		isFlipped = flag;
+	}
+	
+	/**
+	 * Takes the scans from the DepthCAM and updates them in {@link #regenerate()}.
+	 * @param pts
+	 */
+	public void setWristRotationPts(Vec3D[] pts){
+		wristRotPts = pts;
+	}
+	
+	
 
 }
